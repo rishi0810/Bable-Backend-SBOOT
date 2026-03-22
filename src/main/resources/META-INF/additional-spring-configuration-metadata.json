@@ -1,0 +1,12 @@
+{"properties": [
+  {
+    "name": "app.jwt.secret",
+    "type": "java.lang.String",
+    "description": "JWT secret"
+  },
+  {
+    "name": "app.ext.url",
+    "type": "java.lang.String",
+    "description": "Image Optimized Upload API"
+  }
+]}

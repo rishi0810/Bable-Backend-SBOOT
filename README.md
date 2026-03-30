@@ -283,3 +283,10 @@ Common failures:
   - `/blog/blog-content`
 - Protected routes require `Authorization: Bearer <jwt>`.
 - CORS is configured for `http://localhost:5173` and `https://bable.vercel.app`.
+
+
+## Redis
+- Redis cache is integrated for all listing page, each blog's display page and each user's profile page.
+- Cache clears and handles itself to avoid stale data
+
+

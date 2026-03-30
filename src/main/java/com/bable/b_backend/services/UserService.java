@@ -10,6 +10,7 @@ import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.bable.b_backend.config.RedisConfig;
 import com.bable.b_backend.mappers.JWTBody;
 import com.bable.b_backend.mappers.ProfileBody;
 import com.bable.b_backend.mappers.ProfileBody.BlogItem;
@@ -21,6 +22,7 @@ import com.bable.b_backend.repository.UserRepository;
 import com.bable.b_backend.security.ArgonConfig;
 import com.bable.b_backend.security.AuthContext;
 import com.bable.b_backend.security.JWTConfig;
+import com.bable.b_backend.utils.ConvertDTO;
 import com.bable.b_backend.utils.ResponseMapper;
 
 @Service
@@ -38,6 +40,13 @@ public class UserService {
     @Autowired
     private AuthContext authContext;
 
+    // Auto Injection of Redis Configuration
+    @Autowired
+    private RedisConfig.RedisClient redis;
+
+    // Auto Injection of a DTO converter 
+    @Autowired
+    private ConvertDTO converter;
 
     // Creation of JWT Config instance
     @Autowired
@@ -148,25 +157,17 @@ public class UserService {
             return null;
         }
 
-        // Extract list of blogs of both arrays
-        List<BlogItem> writtenBlogItems = mapBlogItems(
-            existingUser.get().getWrittenBlogs()
-        );
-        List<BlogItem> storedBlogItems = mapBlogItems(
-            existingUser.get().getStoredBlogs()
-        );
+        // Check if cached data exists -> send directly skipping DB interaction
+        ProfileBody redisUser = redis.getObject(Id + "_pf", ProfileBody.class);
+        if(redisUser != null){
+            return redisUser;
+        }
 
-        // Create the profile object to send to handler
-        ProfileBody currentUserDetails = new ProfileBody();
-        currentUserDetails.setId(existingUser.get().getId());
-        currentUserDetails.setName(existingUser.get().getName());
-        currentUserDetails.setEmail(existingUser.get().getEmail());
-        currentUserDetails.setWrittenBlogs(writtenBlogItems);
-        currentUserDetails.setStoredBlogs(storedBlogItems);
-        currentUserDetails.setUpdatedAt(existingUser.get().getUpdatedAt());
-        currentUserDetails.setCreatedAt(existingUser.get().getCreatedAt());
+        ProfileBody userDetails = converter.convertUserToProfileBody(existingUser.get());
+        // Upon building new user, save first to redis for future calls
+        redis.setObject(Id + "_pf",userDetails);
 
-        return currentUserDetails;
+        return userDetails;
     }
 
     // Function to update user detail
@@ -191,7 +192,15 @@ public class UserService {
         User dbUser = existingUser.get();
         dbUser.setName(user.getName());
         dbUser.setEmail(user.getEmail());
-        userRepo.save(dbUser);
+        User updatedUser = userRepo.save(dbUser);
+
+        // delete existing redis profile body cache if any
+        if(redis.exists(updatedUser.getId() + "_pf")){
+            redis.del(updatedUser.getId() + "_pf");
+        }
+
+        // Save profile body to redis for future calls
+        redis.setObject(updatedUser.getId() + "_pf",converter.convertUserToProfileBody(updatedUser));
 
         return ResponseMapper.success(200, "Entity Updated");
     }

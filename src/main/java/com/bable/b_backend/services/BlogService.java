@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.bable.b_backend.config.RedisConfig;
 import com.bable.b_backend.mappers.BlogBody;
 import com.bable.b_backend.mappers.BlogDisplay;
 import com.bable.b_backend.mappers.BlogListing;
@@ -22,23 +23,37 @@ import com.bable.b_backend.models.User;
 import com.bable.b_backend.repository.BlogRepository;
 import com.bable.b_backend.repository.UserRepository;
 import com.bable.b_backend.security.AuthContext;
+import com.bable.b_backend.utils.ConvertDTO;
 import com.bable.b_backend.utils.ResponseMapper;
 
 @Service
 public class BlogService {
 
+    private static final String MAIN_FEED_CACHE_KEY = "main-feed";
+
     // Auto Injection of Blog Repository to connect to Blog Document
     @Autowired
     private BlogRepository blogRepo;
 
+    // Auto Injection of User Repository for connection to User Document
     @Autowired
     private UserRepository userRepo;
 
+    // Auto Injection of Authentication Context Handler
     @Autowired
-    private AuthContext authContext;
+    private AuthContext authContext;    
 
+    // Auto Injection of Image Link external API
     @Autowired
     private ExternalApiService postApi;
+
+    // Auto Injection of Redis Configuration
+    @Autowired
+    private RedisConfig.RedisClient redis;
+
+    // Auto Injection of DTO converter
+    @Autowired
+    private ConvertDTO converter;
 
     // Function to create a new blog
     public ResponseStatus createNewBlog(BlogBody entity) {
@@ -57,8 +72,12 @@ public class BlogService {
             newBlog.setAuthor(currentAuthor.getId());
             newBlog.setContent(entity.getContent());
             newBlog.setImgUrl(postApi.uploadImage(entity.getImg_url()));
+
             // Upsert Blog
             Blog savedBlog = blogRepo.save(newBlog);
+
+            // create redis cache for the new blog display on website
+            redis.setObject(savedBlog.getId() + "_bd", converter.convertBlogToBlogDisplay(savedBlog, currentAuthor));
 
             Optional<User> dbUser = userRepo.findById(currentAuthor.getId());;
             if (dbUser.isEmpty()) {
@@ -71,7 +90,19 @@ public class BlogService {
             currentWrittenBlogs.add(savedBlog.getId());
             modifiedUser.setWrittenBlogs(currentWrittenBlogs);
             // Upsert the information
-            userRepo.save(modifiedUser);
+            User redisUser = userRepo.save(modifiedUser);
+
+            // check redis cache for existing user profile page
+            if (redis.exists(modifiedUser.getId() + "_pf")) {
+                // if present -> remove the current user profile page cache
+                redis.del(modifiedUser.getId() + "_pf");
+            }
+
+            // Save profile body to redis for future calls
+            redis.setObject(redisUser.getId() + "_pf", converter.convertUserToProfileBody(redisUser));
+
+            // refresh the main feed below
+            refreshMainFeedCache();
 
             return ResponseMapper.success(201, "Blog Created | " + savedBlog.getId());
 
@@ -121,8 +152,18 @@ public class BlogService {
                 modifiedUser.setStoredBlogs(currentStoredBlogs);
 
                 // Safely Upsert the Modified User
-                userRepo.save(modifiedUser);
+                User changedUser = userRepo.save(modifiedUser);
 
+                // check if a redis cache exists for the user profile page
+                if (redis.exists(changedUser.getId()+"_pf")){
+                    // if there, delete
+                    redis.del(changedUser.getId()+"_pf");
+                }
+
+                // Create new profile body and save 
+                redis.setObject(changedUser.getId() + "_pf", converter.convertUserToProfileBody(changedUser));
+
+                // check if the user exists in redis cache
                 // Step - 2 -> remove the blog from every user's saved list
                 List<User> usersWhoSavedTheBlog = userRepo.findByStoredBlogsContaining(id);
                 // Parse each user -> remove from list and upsert
@@ -133,9 +174,21 @@ public class BlogService {
                     updatedStoredBlogs.remove(id);
                     user.setStoredBlogs(updatedStoredBlogs);
                     userRepo.save(user);
+                    
+                    // For all users profile body existence
+                    if(redis.exists(user.getId()+"_pf")){
+                        // delete no rebuild
+                        redis.del(user.getId()+"_pf");
+                    }
                 }
 
                 blogRepo.deleteById(id);
+
+                // remove the blog's display cache
+                redis.del(id + "_bd");
+                
+                // refresh the main feed below
+                refreshMainFeedCache();
 
                 return ResponseMapper.success(200, "Blog Deleted | Id " + id);
             } // Reject if not the owner
@@ -156,40 +209,59 @@ public class BlogService {
             return null;
         }
 
+        // If the blog info exists in redis cache, send from there only
+        if(redis.exists(id + "_bd")){
+            return redis.getObject(id + "_bd", BlogDisplay.class);
+        }
+
+
+        // Create JWT Body and blog body to send to converter
         Blog toShowBlog = existingBlog.get();
-
-        BlogDisplay targetBlog = new BlogDisplay();
-
-        // Convert Blog item to display item
-        targetBlog.setId(id);
-        targetBlog.setImg_url(toShowBlog.getImgUrl());
-        targetBlog.setContent(toShowBlog.getContent());
-        targetBlog.setHeading(toShowBlog.getHeading());
-        targetBlog.setUpvotes(0);
-        targetBlog.setCreatedAt(toShowBlog.getCreatedAt());
-        targetBlog.setUpdatedAt(toShowBlog.getUpdatedAt());
-
-        // Find the author of the blog by repo function
-        BlogDisplay.AuthorItem author = new BlogDisplay.AuthorItem();
-        String authorName = userRepo.findAuthorById(toShowBlog.getAuthor())
-                .map(UserRepository.AuthorNameView::getName)
-                .orElse(null);
-
-        author.setId(toShowBlog.getAuthor());
-        author.setName(authorName);
+        // Fetch the target blog author
+        User blogAuthor = userRepo.findById(toShowBlog.getAuthor()).orElse(null);
+        JWTBody temp = new JWTBody();
+        // Create JWT DTO body
+        temp.setId(blogAuthor.getId());
+        temp.setEmail(blogAuthor.getEmail());
+        temp.setName(blogAuthor.getName());
+        // Create Blog Display body
+        BlogDisplay targetBlog = converter.convertBlogToBlogDisplay(toShowBlog, temp);
         
-        // Response object created
-        targetBlog.setAuthor(author);
-
+        // Create redis cache for the blog display & return
+        redis.setObject(id + "_bd" , targetBlog);
         return targetBlog;
     }
 
     // Function to create main feed
     public List<BlogListing> getBlogFeed() {
-        List<Blog> allBlogs = blogRepo.findAll();
+        // check if main feed is cached
+        if (redis.exists(MAIN_FEED_CACHE_KEY)) {
+            // build a class from list of blogListings
+            Class<BlogListing> cacheType = BlogListing.class;
+            // if the cached feed exists, serve directly
+            List<BlogListing> cachedFeed = redis.getList(MAIN_FEED_CACHE_KEY, cacheType);
+            if (cachedFeed != null) {
+                return cachedFeed;
+            }
+        }
 
+        // build main feed and create new cache 
+        List<BlogListing> finalList = buildMainFeed();
+        redis.setList(MAIN_FEED_CACHE_KEY, finalList);
+        return finalList;
+    }
+
+    // refresh main feed cache on call, for changes to any of the blog (add | remove)
+    private void refreshMainFeedCache() {
+        redis.del(MAIN_FEED_CACHE_KEY);
+        redis.setList(MAIN_FEED_CACHE_KEY, buildMainFeed());
+    }  
+
+    // DB - based cache build
+    private List<BlogListing> buildMainFeed() {
+        List<Blog> allBlogs = blogRepo.findAll();
         if (allBlogs == null) {
-            return null;
+            return new ArrayList<>();
         }
 
         // Extract all author ids from all blogs
@@ -223,7 +295,6 @@ public class BlogService {
                     return temp;
                 })
                 .collect(Collectors.toList());
-
     }
 
     // Function to add blog to saved
@@ -262,7 +333,16 @@ public class BlogService {
             modifiedUser.setStoredBlogs(currentSavedBlogs);
 
             // Save the full user document so unrelated fields are preserved
-            userRepo.save(modifiedUser);
+            User changedUser = userRepo.save(modifiedUser);
+
+            // check if redis cache exists for the user profile
+            if (redis.exists(changedUser.getId() + "_pf")){
+                // clear the cache
+                redis.del(changedUser.getId() + "_pf");
+            }
+
+            // create new user profile cache
+            redis.setObject(changedUser.getId() + "_pf", converter.convertUserToProfileBody(changedUser));
 
             return ResponseMapper.success(200, "Blog Saved | ID " + id);
         } catch (Exception e) {
@@ -272,8 +352,8 @@ public class BlogService {
     }
 
     // Function to remove a blog from saved
-    public ResponseStatus removeBlogFromSave(String id){
-         // Find existing blog by id
+    public ResponseStatus removeBlogFromSave(String id) {
+        // Find existing blog by id
         Optional<Blog> existingBlog = blogRepo.findById(id);
         if (existingBlog.isEmpty()) {
             return ResponseMapper.error(404, "Blog Not Found");
@@ -282,28 +362,39 @@ public class BlogService {
         // Get current signed in user by context
         JWTBody currentUser = (JWTBody) authContext.getCurrentUser();
 
-        if (currentUser == null) return ResponseMapper.error(403, "Lack of Access");
-
+        if (currentUser == null) {
+            return ResponseMapper.error(403, "Lack of Access");
+        }
 
         try {
-         Optional <User> dbUser = userRepo.findById(currentUser.getId());
-         if(dbUser.isEmpty()) return ResponseMapper.error(404, "User Not Found");
+            Optional<User> dbUser = userRepo.findById(currentUser.getId());
+            if (dbUser.isEmpty()) {
+                return ResponseMapper.error(404, "User Not Found");
+            }
 
-         User modifiedUser = dbUser.get();
-         // Build new stored array without the removal
-         List<String> currentStoredBlogs = modifiedUser.getStoredBlogs() == null ? new ArrayList<>() : new ArrayList<>(modifiedUser.getStoredBlogs());
-         currentStoredBlogs.remove(id);
-         modifiedUser.setStoredBlogs(currentStoredBlogs);
-         // Upsert the information
-         userRepo.save(modifiedUser);
+            User modifiedUser = dbUser.get();
+            // Build new stored array without the removal
+            List<String> currentStoredBlogs = modifiedUser.getStoredBlogs() == null ? new ArrayList<>() : new ArrayList<>(modifiedUser.getStoredBlogs());
+            currentStoredBlogs.remove(id);
+            modifiedUser.setStoredBlogs(currentStoredBlogs);
+            // Upsert the information
+            User changedUser = userRepo.save(modifiedUser);
 
-        return ResponseMapper.success(200, "Blog Deleted From Save | ID " + id);
-   
+            // check if redis cache exists for the user profile
+            if (redis.exists(changedUser.getId() + "_pf")){
+                // clear the cache
+                redis.del(changedUser.getId() + "_pf");
+            }
+
+            // create new user profile cache
+            redis.setObject(changedUser.getId() + "_pf", converter.convertUserToProfileBody(changedUser));
+
+            return ResponseMapper.success(200, "Blog Deleted From Save | ID " + id);
+
         } catch (Exception e) {
             return ResponseMapper.error(500, "Internal Server Error");
         }
-        
-        
+
     }
 
 }

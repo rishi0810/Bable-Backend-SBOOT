@@ -63,6 +63,7 @@ public class SecurityConfig {
         ));
         configuration.setAllowedMethods(List.of("GET", "POST", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
+        configuration.setExposedHeaders(List.of("Authorization"));
         configuration.setAllowCredentials(true);
         // Register CORS setup to the configuration
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

@@ -16,6 +16,7 @@ import com.bable.b_backend.mappers.ProfileBody;
 import com.bable.b_backend.mappers.ProfileBody.BlogItem;
 import com.bable.b_backend.mappers.ResponseStatus;
 import com.bable.b_backend.mappers.UserBody;
+import com.bable.b_backend.mappers.UserLoginInfo;
 import com.bable.b_backend.models.User;
 import com.bable.b_backend.repository.BlogRepository;
 import com.bable.b_backend.repository.UserRepository;
@@ -117,11 +118,15 @@ public class UserService {
     }
 
     // Function to handle user login
-    public ResponseStatus handleLoginUser(UserBody entity) {
+    public UserLoginInfo handleLoginUser(UserBody entity) {
         // Check for user existence
         Optional<User> existingUser = userRepo.findByEmail(entity.getEmail());
         if (existingUser.isEmpty()) {
-            return ResponseMapper.error(404, "No User Found");
+            UserLoginInfo loginInfo = new UserLoginInfo();
+            loginInfo.setCode(404);
+            loginInfo.setMessage("User Not Found");
+            loginInfo.setLoggedIn(false);
+            return loginInfo;
         }
 
         // Get the user in DB and validate password
@@ -133,7 +138,11 @@ public class UserService {
 
         // If wrong password -> Throw incorrect creds
         if (validatePassword == false) {
-            return ResponseMapper.error(401, "Unauthorized");
+             UserLoginInfo loginInfo = new UserLoginInfo();
+            loginInfo.setCode(401);
+            loginInfo.setMessage("Wrong Credentials");
+            loginInfo.setLoggedIn(false);
+            return loginInfo;
         }
         // Create a new JWT Body from the User entity in request body
         JWTBody body = new JWTBody();
@@ -143,8 +152,16 @@ public class UserService {
 
         // Create a new JWT token for the validated user and send to handler
         String jwtToken = config.generateJWTToken(body);
-        return ResponseMapper.success(200, jwtToken);
+        UserLoginInfo loginInfo = new UserLoginInfo();
+        loginInfo.setId(user.getId());
+        loginInfo.setName(user.getName());
+        loginInfo.setEmail(user.getEmail());
+        loginInfo.setToken(jwtToken);
+        loginInfo.setLoggedIn(true);
+        loginInfo.setCode(200);
+        loginInfo.setMessage("User Logged In");
         
+        return loginInfo;
         
         
     }

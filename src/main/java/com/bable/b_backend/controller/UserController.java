@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.RestController;
 import com.bable.b_backend.mappers.ProfileBody;
 import com.bable.b_backend.mappers.ResponseStatus;
 import com.bable.b_backend.mappers.UserBody;
+import com.bable.b_backend.mappers.UserInfo;
+import com.bable.b_backend.mappers.UserLoginInfo;
 import com.bable.b_backend.models.User;
 import com.bable.b_backend.services.UserService;
 
@@ -24,7 +26,8 @@ public class UserController {
     // Auto Injection of User Service Logic
     @Autowired
     private UserService userServe;
-    
+
+
     // Route for Creating New Account
     @PostMapping("/create-user")
     public ResponseEntity<String> createUser(@RequestBody UserBody entity) {
@@ -35,22 +38,32 @@ public class UserController {
 
     // Route for Login User
     @PostMapping("/login-user")
-    public ResponseEntity<String> loginUser(@RequestBody UserBody entity) {
+    public ResponseEntity<UserInfo> loginUser(@RequestBody UserBody entity) {
 
         // Returns JWT Token on User Validation via String Body
-        ResponseStatus validation = userServe.handleLoginUser(entity);
+        UserLoginInfo currInfo = userServe.handleLoginUser(entity);
+
 
         // If User was found -> return JWT in Authorization header for bearer auth
-        if (validation.isSuccess()) {
+        if (currInfo.isLoggedIn()) {
+            UserInfo authUser = new UserInfo();
+            authUser.setName(currInfo.getName());
+            authUser.setEmail(currInfo.getEmail());
+            authUser.setId(currInfo.getId());
+
             return ResponseEntity
-                    .status(validation.getCode())
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + validation.getStringBody())
-                    .body(validation.getStringBody());
+                    .status(currInfo.getCode())
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + currInfo.getToken())
+                    .body(authUser);
 
         }
+        UserInfo errorAuthUser = new UserInfo();
+            errorAuthUser.setName("Null");
+            errorAuthUser.setEmail("Null");
+            errorAuthUser.setId("Null");
 
         // Any kind of Error with status Code
-        return ResponseEntity.status(validation.getCode()).body(validation.getStringBody());
+        return ResponseEntity.status(currInfo.getCode()).body(errorAuthUser);
 
     }
     

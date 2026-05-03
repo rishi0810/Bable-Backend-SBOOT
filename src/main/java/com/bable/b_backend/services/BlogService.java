@@ -24,12 +24,11 @@ import com.bable.b_backend.repository.BlogRepository;
 import com.bable.b_backend.repository.UserRepository;
 import com.bable.b_backend.security.AuthContext;
 import com.bable.b_backend.utils.ConvertDTO;
+import com.bable.b_backend.utils.Constants;
 import com.bable.b_backend.utils.ResponseMapper;
 
 @Service
 public class BlogService {
-
-    private static final String MAIN_FEED_CACHE_KEY = "main-feed";
 
     // Auto Injection of Blog Repository to connect to Blog Document
     @Autowired
@@ -77,7 +76,7 @@ public class BlogService {
             Blog savedBlog = blogRepo.save(newBlog);
 
             // create redis cache for the new blog display on website
-            redis.setObject(savedBlog.getId() + "_bd", converter.convertBlogToBlogDisplay(savedBlog, currentAuthor));
+            redis.setObject(Constants.blogDisplayCacheKey(savedBlog.getId()), converter.convertBlogToBlogDisplay(savedBlog, currentAuthor));
 
             Optional<User> dbUser = userRepo.findById(currentAuthor.getId());;
             if (dbUser.isEmpty()) {
@@ -93,13 +92,13 @@ public class BlogService {
             User redisUser = userRepo.save(modifiedUser);
 
             // check redis cache for existing user profile page
-            if (redis.exists(modifiedUser.getId() + "_pf")) {
+            if (redis.exists(Constants.profileCacheKey(modifiedUser.getId()))) {
                 // if present -> remove the current user profile page cache
-                redis.del(modifiedUser.getId() + "_pf");
+                redis.del(Constants.profileCacheKey(modifiedUser.getId()));
             }
 
             // Save profile body to redis for future calls
-            redis.setObject(redisUser.getId() + "_pf", converter.convertUserToProfileBody(redisUser));
+            redis.setObject(Constants.profileCacheKey(redisUser.getId()), converter.convertUserToProfileBody(redisUser));
 
             // refresh the main feed below
             refreshMainFeedCache();
@@ -155,13 +154,13 @@ public class BlogService {
                 User changedUser = userRepo.save(modifiedUser);
 
                 // check if a redis cache exists for the user profile page
-                if (redis.exists(changedUser.getId()+"_pf")){
+                if (redis.exists(Constants.profileCacheKey(changedUser.getId()))){
                     // if there, delete
-                    redis.del(changedUser.getId()+"_pf");
+                    redis.del(Constants.profileCacheKey(changedUser.getId()));
                 }
 
                 // Create new profile body and save 
-                redis.setObject(changedUser.getId() + "_pf", converter.convertUserToProfileBody(changedUser));
+                redis.setObject(Constants.profileCacheKey(changedUser.getId()), converter.convertUserToProfileBody(changedUser));
 
                 // check if the user exists in redis cache
                 // Step - 2 -> remove the blog from every user's saved list
@@ -176,16 +175,16 @@ public class BlogService {
                     userRepo.save(user);
                     
                     // For all users profile body existence
-                    if(redis.exists(user.getId()+"_pf")){
+                    if(redis.exists(Constants.profileCacheKey(user.getId()))){
                         // delete no rebuild
-                        redis.del(user.getId()+"_pf");
+                        redis.del(Constants.profileCacheKey(user.getId()));
                     }
                 }
 
                 blogRepo.deleteById(id);
 
                 // remove the blog's display cache
-                redis.del(id + "_bd");
+                redis.del(Constants.blogDisplayCacheKey(id));
                 
                 // refresh the main feed below
                 refreshMainFeedCache();
@@ -210,8 +209,8 @@ public class BlogService {
         }
 
         // If the blog info exists in redis cache, send from there only
-        if(redis.exists(id + "_bd")){
-            return redis.getObject(id + "_bd", BlogDisplay.class);
+        if(redis.exists(Constants.blogDisplayCacheKey(id))){
+            return redis.getObject(Constants.blogDisplayCacheKey(id), BlogDisplay.class);
         }
 
 
@@ -228,18 +227,18 @@ public class BlogService {
         BlogDisplay targetBlog = converter.convertBlogToBlogDisplay(toShowBlog, temp);
         
         // Create redis cache for the blog display & return
-        redis.setObject(id + "_bd" , targetBlog);
+        redis.setObject(Constants.blogDisplayCacheKey(id) , targetBlog);
         return targetBlog;
     }
 
     // Function to create main feed
     public List<BlogListing> getBlogFeed() {
         // check if main feed is cached
-        if (redis.exists(MAIN_FEED_CACHE_KEY)) {
+        if (redis.exists(Constants.MAIN_FEED_CACHE_KEY)) {
             // build a class from list of blogListings
             Class<BlogListing> cacheType = BlogListing.class;
             // if the cached feed exists, serve directly
-            List<BlogListing> cachedFeed = redis.getList(MAIN_FEED_CACHE_KEY, cacheType);
+            List<BlogListing> cachedFeed = redis.getList(Constants.MAIN_FEED_CACHE_KEY, cacheType);
             if (cachedFeed != null) {
                 return cachedFeed;
             }
@@ -247,14 +246,14 @@ public class BlogService {
 
         // build main feed and create new cache 
         List<BlogListing> finalList = buildMainFeed();
-        redis.setList(MAIN_FEED_CACHE_KEY, finalList);
+        redis.setList(Constants.MAIN_FEED_CACHE_KEY, finalList);
         return finalList;
     }
 
     // refresh main feed cache on call, for changes to any of the blog (add | remove)
     private void refreshMainFeedCache() {
-        redis.del(MAIN_FEED_CACHE_KEY);
-        redis.setList(MAIN_FEED_CACHE_KEY, buildMainFeed());
+        redis.del(Constants.MAIN_FEED_CACHE_KEY);
+        redis.setList(Constants.MAIN_FEED_CACHE_KEY, buildMainFeed());
     }  
 
     // DB - based cache build
@@ -336,13 +335,13 @@ public class BlogService {
             User changedUser = userRepo.save(modifiedUser);
 
             // check if redis cache exists for the user profile
-            if (redis.exists(changedUser.getId() + "_pf")){
+            if (redis.exists(Constants.profileCacheKey(changedUser.getId()))){
                 // clear the cache
-                redis.del(changedUser.getId() + "_pf");
+                redis.del(Constants.profileCacheKey(changedUser.getId()));
             }
 
             // create new user profile cache
-            redis.setObject(changedUser.getId() + "_pf", converter.convertUserToProfileBody(changedUser));
+            redis.setObject(Constants.profileCacheKey(changedUser.getId()), converter.convertUserToProfileBody(changedUser));
 
             return ResponseMapper.success(200, "Blog Saved | ID " + id);
         } catch (Exception e) {
@@ -381,13 +380,13 @@ public class BlogService {
             User changedUser = userRepo.save(modifiedUser);
 
             // check if redis cache exists for the user profile
-            if (redis.exists(changedUser.getId() + "_pf")){
+            if (redis.exists(Constants.profileCacheKey(changedUser.getId()))){
                 // clear the cache
-                redis.del(changedUser.getId() + "_pf");
+                redis.del(Constants.profileCacheKey(changedUser.getId()));
             }
 
             // create new user profile cache
-            redis.setObject(changedUser.getId() + "_pf", converter.convertUserToProfileBody(changedUser));
+            redis.setObject(Constants.profileCacheKey(changedUser.getId()), converter.convertUserToProfileBody(changedUser));
 
             return ResponseMapper.success(200, "Blog Deleted From Save | ID " + id);
 

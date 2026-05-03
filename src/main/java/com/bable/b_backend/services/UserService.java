@@ -24,6 +24,7 @@ import com.bable.b_backend.security.ArgonConfig;
 import com.bable.b_backend.security.AuthContext;
 import com.bable.b_backend.security.JWTConfig;
 import com.bable.b_backend.utils.ConvertDTO;
+import com.bable.b_backend.utils.Constants;
 import com.bable.b_backend.utils.ResponseMapper;
 
 @Service
@@ -175,14 +176,14 @@ public class UserService {
         }
 
         // Check if cached data exists -> send directly skipping DB interaction
-        ProfileBody redisUser = redis.getObject(Id + "_pf", ProfileBody.class);
+        ProfileBody redisUser = redis.getObject(Constants.profileCacheKey(Id), ProfileBody.class);
         if(redisUser != null){
             return redisUser;
         }
 
         ProfileBody userDetails = converter.convertUserToProfileBody(existingUser.get());
         // Upon building new user, save first to redis for future calls
-        redis.setObject(Id + "_pf",userDetails);
+        redis.setObject(Constants.profileCacheKey(Id),userDetails);
 
         return userDetails;
     }
@@ -212,12 +213,12 @@ public class UserService {
         User updatedUser = userRepo.save(dbUser);
 
         // delete existing redis profile body cache if any
-        if(redis.exists(updatedUser.getId() + "_pf")){
-            redis.del(updatedUser.getId() + "_pf");
+        if(redis.exists(Constants.profileCacheKey(updatedUser.getId()))){
+            redis.del(Constants.profileCacheKey(updatedUser.getId()));
         }
 
         // Save profile body to redis for future calls
-        redis.setObject(updatedUser.getId() + "_pf",converter.convertUserToProfileBody(updatedUser));
+        redis.setObject(Constants.profileCacheKey(updatedUser.getId()),converter.convertUserToProfileBody(updatedUser));
 
         return ResponseMapper.success(200, "Entity Updated");
     }
